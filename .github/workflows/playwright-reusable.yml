@@ -1,0 +1,102 @@
+name: playwright-tests
+
+on:
+  workflow_call:
+    inputs:
+      playwright-version:
+        description: Playwright container image tag (e.g., v1.55.0-jammy)
+        required: false
+        default: v1.55.0-jammy
+        type: string
+      node-version:
+        description: Node.js version to use
+        required: false
+        default: lts/*
+        type: string
+      matrix:
+        description: JSON matrix for sharding, e.g. '{"shardIndex":[1,2,3,4],"shardTotal":[4]}'
+        required: false
+        default: '{"shardIndex":[1,2,3,4],"shardTotal":[4]}'
+        type: string
+    secrets:
+      npm_reader_token:
+        description: Token for GitHub Packages registry (if needed)
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  playwright-tests:
+    timeout-minutes: 60
+    runs-on: ubuntu-latest
+    container: mcr.microsoft.com/playwright:${{ inputs.playwright-version }}
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(inputs.matrix) }}
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'yarn'
+          cache-dependency-path: |
+            **/yarn.lock
+            **/package.json
+          registry-url: 'https://npm.pkg.github.com'
+      - name: Install dependencies
+        env:
+          NPM_AUTH_TOKEN: ${{ secrets.npm_reader_token }}
+          NODE_AUTH_TOKEN: ${{ secrets.npm_reader_token }}
+        run: |
+          corepack enable
+          yarn install --immutable
+      - name: Run Playwright tests
+        env:
+          HOME: /root
+          CI: 'true'
+        run: yarn playwright test --shard=${{ matrix.shardIndex }}/${{ matrix.shardTotal }}
+      - name: Upload blob report to GitHub Actions Artifacts
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: blob-report-${{ matrix.shardIndex }}
+          path: blob-report
+          retention-days: 1
+
+  merge-reports:
+    if: ${{ !cancelled() }}
+    needs: [playwright-tests]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+          cache: 'yarn'
+          cache-dependency-path: |
+            **/yarn.lock
+            **/package.json
+          registry-url: 'https://npm.pkg.github.com'
+      - name: Install dependencies
+        env:
+          NPM_AUTH_TOKEN: ${{ secrets.npm_reader_token }}
+          NODE_AUTH_TOKEN: ${{ secrets.npm_reader_token }}
+        run: |
+          corepack enable
+          yarn install --immutable
+      - name: Download blob reports from GitHub Actions Artifacts
+        uses: actions/download-artifact@v5
+        with:
+          path: all-blob-reports
+          pattern: blob-report-*
+          merge-multiple: true
+      - name: Merge into HTML Report
+        run: yarn playwright merge-reports --reporter html ./all-blob-reports
+      - name: Upload HTML report
+        uses: actions/upload-artifact@v4
+        with:
+          name: html-report--attempt-${{ github.run_attempt }}
+          path: playwright-report
+          retention-days: 14
