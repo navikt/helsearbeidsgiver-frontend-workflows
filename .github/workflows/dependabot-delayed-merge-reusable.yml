@@ -1,0 +1,108 @@
+name: dependabot-delayed-merge
+
+on:
+  workflow_call:
+    inputs:
+      only-actor:
+        description: Only merge PRs authored by this actor (e.g., dependabot[bot])
+        required: false
+        default: dependabot[bot]
+        type: string
+      label-name:
+        description: Label that marks PRs as eligible for delayed merge
+        required: false
+        default: automerge:delayed
+        type: string
+      days-delay:
+        description: Number of days to wait before merging
+        required: false
+        default: 5
+        type: number
+      merge-method:
+        description: Merge method (merge, squash, rebase)
+        required: false
+        default: squash
+        type: string
+      allow-draft:
+        description: Merge drafts if true
+        required: false
+        default: false
+        type: boolean
+      require-clean-mergeable-state:
+        description: Require mergeable_state to be clean
+        required: false
+        default: true
+        type: boolean
+      dry-run:
+        description: Log instead of merging
+        required: false
+        default: false
+        type: boolean
+    secrets:
+      token:
+        description: Token to use for API calls; defaults to GITHUB_TOKEN if omitted
+        required: false
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  merge:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Merge eligible PRs
+        uses: actions/github-script@v7.0.1
+        env:
+          ONLY_ACTOR: ${{ inputs['only-actor'] }}
+          LABEL_NAME: ${{ inputs['label-name'] }}
+          DAYS_DELAY: ${{ inputs['days-delay'] }}
+          MERGE_METHOD: ${{ inputs['merge-method'] }}
+          ALLOW_DRAFT: ${{ inputs['allow-draft'] }}
+          REQUIRE_CLEAN: ${{ inputs['require-clean-mergeable-state'] }}
+          DRY_RUN: ${{ inputs['dry-run'] }}
+        with:
+          github-token: ${{ secrets.token || secrets.GITHUB_TOKEN }}
+          script: |
+            const { owner, repo } = context.repo;
+            const onlyActor = process.env.ONLY_ACTOR || 'dependabot[bot]';
+            const label = process.env.LABEL_NAME || 'automerge:delayed';
+            const daysDelay = Number(process.env.DAYS_DELAY || 5);
+            const cutoffMs = daysDelay * 24 * 60 * 60 * 1000;
+            const now = Date.now();
+            const allowDraft = process.env.ALLOW_DRAFT === 'true';
+            const requireClean = process.env.REQUIRE_CLEAN === 'true';
+            const dryRun = process.env.DRY_RUN === 'true';
+            const mergeMethod = (process.env.MERGE_METHOD || 'squash');
+
+            core.info(`Scanning PRs in ${owner}/${repo}, label=${label}, delayDays=${daysDelay}, onlyActor=${onlyActor}`);
+
+            const prs = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 });
+            for (const pr of prs) {
+              const reasons = [];
+              if (onlyActor && pr.user?.login !== onlyActor) reasons.push(`actor!=${onlyActor}`);
+              const hasLabel = !!pr.labels?.some(l => l.name === label);
+              if (!hasLabel) reasons.push(`missing label ${label}`);
+              if (pr.draft && !allowDraft) reasons.push('draft');
+              if (now - new Date(pr.created_at).getTime() < cutoffMs) reasons.push('not old enough');
+
+              // Refresh mergeability
+              const { data: full } = await github.rest.pulls.get({ owner, repo, pull_number: pr.number });
+              if (requireClean && full.mergeable_state !== 'clean') reasons.push(`mergeable_state=${full.mergeable_state}`);
+
+              if (reasons.length) {
+                core.info(`#${pr.number} skipped: ${reasons.join(', ')}`);
+                continue;
+              }
+
+              try {
+                if (dryRun) {
+                  core.info(`[dry-run] Would merge #${pr.number} with method=${mergeMethod}`);
+                } else {
+                  await github.rest.pulls.merge({ owner, repo, pull_number: pr.number, merge_method: mergeMethod });
+                  core.info(`Merged #${pr.number}`);
+                }
+              } catch (e) {
+                core.warning(`Could not merge #${pr.number}: ${e.message}`);
+              }
+            }

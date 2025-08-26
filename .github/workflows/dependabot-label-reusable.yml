@@ -1,0 +1,111 @@
+name: dependabot-label
+
+on:
+  workflow_call:
+    inputs:
+      only-dependabot:
+        description: Only run when the actor is Dependabot
+        required: false
+        default: true
+        type: boolean
+      label-name:
+        description: Label to add for eligible updates
+        required: false
+        default: automerge:delayed
+        type: string
+      label-color:
+        description: Hex color (without #) for the label; used when creating if missing
+        required: false
+        default: FFFF00
+        type: string
+      label-description:
+        description: Description for the label; used when creating if missing
+        required: false
+        default: Auto-merge Dependabot after delay
+        type: string
+      include-update-types:
+        description: >-
+          Comma-separated list of Dependabot update types to label, e.g.
+          "version-update:semver-minor,version-update:semver-patch".
+        required: false
+        default: version-update:semver-minor,version-update:semver-patch
+        type: string
+      also-add-update-type-label:
+        description: Also add the update-type label (if it already exists); not auto-created
+        required: false
+        default: true
+        type: boolean
+    secrets:
+      token:
+        description: Token to use for API calls; defaults to GITHUB_TOKEN if omitted
+        required: false
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  label:
+    # If only-dependabot is true, run only for Dependabot PRs; otherwise always run
+    if: ${{ !inputs.only-dependabot || github.actor == 'dependabot[bot]' }}
+    runs-on: ubuntu-latest
+    steps:
+      - id: meta
+        uses: dependabot/fetch-metadata@v2.2.0
+        with:
+          github-token: ${{ secrets.token || secrets.GITHUB_TOKEN }}
+
+      - name: Add labels for eligible update types
+        if: ${{ contains(inputs.include-update-types, steps.meta.outputs.update-type) }}
+        uses: actions/github-script@v7.0.1
+        env:
+          LABEL_NAME: ${{ inputs['label-name'] }}
+          LABEL_COLOR: ${{ inputs['label-color'] }}
+          LABEL_DESC: ${{ inputs['label-description'] }}
+          UPDATE_TYPE: ${{ steps.meta.outputs.update-type }}
+          INCLUDE_UPDATE_TYPES: ${{ inputs['include-update-types'] }}
+          ALSO_ADD_UPDATE_TYPE: ${{ inputs['also-add-update-type-label'] }}
+        with:
+          script: |
+            const { owner, repo } = context.repo;
+            const updateType = process.env.UPDATE_TYPE;
+            const allowed = process.env.INCLUDE_UPDATE_TYPES.split(',').map(s => s.trim());
+            if (!allowed.includes(updateType)) {
+              core.info(`Update type ${updateType} not in allowed list: ${allowed.join(', ')}`);
+              return;
+            }
+
+            const labelName = process.env.LABEL_NAME;
+            const labelColor = process.env.LABEL_COLOR || 'FFFF00';
+            const labelDesc = process.env.LABEL_DESC || '';
+
+            const ensureLabel = async (name, color = 'FFFF00', description = '') => {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name });
+              } catch (e) {
+                if (e.status === 404) {
+                  await github.rest.issues.createLabel({ owner, repo, name, color, description });
+                } else {
+                  throw e;
+                }
+              }
+            };
+
+            await ensureLabel(labelName, labelColor, labelDesc);
+
+            const labels = [labelName];
+
+            if (process.env.ALSO_ADD_UPDATE_TYPE === 'true') {
+              try {
+                await github.rest.issues.getLabel({ owner, repo, name: updateType });
+                labels.push(updateType);
+              } catch (e) {
+                if (e.status !== 404) throw e;
+              }
+            }
+
+            await github.rest.issues.addLabels({
+              owner, repo,
+              issue_number: context.issue.number,
+              labels
+            });
