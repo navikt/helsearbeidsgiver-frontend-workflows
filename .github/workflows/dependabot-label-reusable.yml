@@ -51,7 +51,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - id: meta
-        uses: dependabot/fetch-metadata@v2.2.0
+        uses: dependabot/fetch-metadata@v2.4.0
         with:
           github-token: ${{ secrets.token || secrets.GITHUB_TOKEN }}
 
