@@ -75,6 +75,68 @@ jobs:
             const dryRun = process.env.DRY_RUN === 'true';
             const mergeMethod = (process.env.MERGE_METHOD || 'squash');
 
+            const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+
+            async function getPR(number) {
+              const { data } = await github.rest.pulls.get({ owner, repo, pull_number: number });
+              return data;
+            }
+
+            async function waitForMergeability(number, maxTries = 8, baseDelayMs = 500) {
+              let last = await getPR(number);
+              for (let i = 0; i < maxTries; i++) {
+                const ready = last.mergeable !== null && last.mergeable_state !== 'unknown';
+                core.info(`#${number} mergeability check ${i + 1}/${maxTries}: mergeable=${last.mergeable}, state=${last.mergeable_state}`);
+                if (ready) return last;
+                await sleep(Math.min(baseDelayMs * Math.pow(2, i), 8000));
+                last = await getPR(number);
+              }
+              return last;
+            }
+
+            async function tryUpdateBranch(pr) {
+              // Only works for same-repo branches (not forks) and when "Update branch" is allowed
+              const sameRepo = pr.head?.repo?.id && pr.base?.repo?.id && pr.head.repo.id === pr.base.repo.id;
+              if (!sameRepo) {
+                core.info(`#${pr.number} cannot update-branch (fork or missing repo info).`);
+                return false;
+              }
+              try {
+                core.info(`#${pr.number} attempting update-branch to poke mergeability...`);
+                await github.request('PUT /repos/{owner}/{repo}/pulls/{pull_number}/update-branch', {
+                  owner, repo, pull_number: pr.number,
+                  // expected_head_sha optional; omit to avoid 412 conflicts
+                });
+                return true;
+              } catch (e) {
+                core.info(`#${pr.number} update-branch not possible: ${e.status || ''} ${e.message}`);
+                return false;
+              }
+            }
+
+            async function maybeAskDependabotToRebase(pr) {
+              if (pr.user?.login !== 'dependabot[bot]') return false;
+              const marker = '<!-- automerge:delayed:poke-mergeability -->';
+              const comments = await github.paginate(github.rest.issues.listComments, {
+                owner, repo, issue_number: pr.number, per_page: 100
+              });
+              if (comments.some(c => typeof c.body === 'string' && c.body.includes(marker))) {
+                core.info(`#${pr.number} rebase comment already posted.`);
+                return false;
+              }
+              try {
+                core.info(`#${pr.number} asking Dependabot to rebase...`);
+                await github.rest.issues.createComment({
+                  owner, repo, issue_number: pr.number,
+                  body: `${marker}\n@dependabot rebase`
+                });
+                return true;
+              } catch (e) {
+                core.info(`#${pr.number} could not comment to dependabot: ${e.message}`);
+                return false;
+              }
+            }
+
             core.info(`Scanning PRs in ${owner}/${repo}, label=${label}, delayDays=${daysDelay}, onlyActor=${onlyActor}`);
 
             const prs = await github.paginate(github.rest.pulls.list, { owner, repo, state: 'open', per_page: 100 });
@@ -86,12 +148,36 @@ jobs:
               if (pr.draft && !allowDraft) reasons.push('draft');
               if (now - new Date(pr.created_at).getTime() < cutoffMs) reasons.push('not old enough');
 
-              // Refresh mergeability
-              const { data: full } = await github.rest.pulls.get({ owner, repo, pull_number: pr.number });
-              if (requireClean && full.mergeable_state !== 'clean') reasons.push(`mergeable_state=${full.mergeable_state}`);
-
               if (reasons.length) {
                 core.info(`#${pr.number} skipped: ${reasons.join(', ')}`);
+                continue;
+              }
+
+              // Poll for mergeability first
+              let full = await waitForMergeability(pr.number);
+
+              // If still unknown, try to poke GitHub to recompute
+              if (full.mergeable_state === 'unknown' || full.mergeable === null) {
+                const pokedByUpdate = await tryUpdateBranch(full);
+                const pokedByDependabot = await maybeAskDependabotToRebase(full);
+                if (pokedByUpdate || pokedByDependabot) {
+                  // Give it some time and check again a few times
+                  for (let i = 0; i < 5; i++) {
+                    await sleep(2000 * (i + 1));
+                    full = await getPR(pr.number);
+                    core.info(`#${pr.number} post-poke state try ${i + 1}: mergeable=${full.mergeable}, state=${full.mergeable_state}`);
+                    if (full.mergeable !== null && full.mergeable_state !== 'unknown') break;
+                  }
+                }
+              }
+
+              if (full.mergeable_state === 'unknown' || full.mergeable === null) {
+                core.info(`#${pr.number} skipped: mergeable_state still unknown after retries.`);
+                continue;
+              }
+
+              if (requireClean && full.mergeable_state !== 'clean') {
+                core.info(`#${pr.number} skipped: mergeable_state=${full.mergeable_state}`);
                 continue;
               }
 
