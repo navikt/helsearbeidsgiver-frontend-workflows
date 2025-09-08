@@ -52,7 +52,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Merge eligible PRs
-        uses: actions/github-script@v7.0.1
+        uses: actions/github-script@v8.0.0
         env:
           ONLY_ACTOR: ${{ inputs['only-actor'] }}
           LABEL_NAME: ${{ inputs['label-name'] }}
