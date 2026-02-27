@@ -79,7 +79,11 @@ jobs:
           cache: "pnpm"
           cache-dependency-path: pnpm-lock.yaml
           registry-url: "https://npm.pkg.github.com"
-      - run: pnpm install --frozen-lockfile
+      - name: Install dependencies
+        env:
+          NPM_AUTH_TOKEN: ${{ secrets.npm_reader_token }}
+          NODE_AUTH_TOKEN: ${{ secrets.npm_reader_token }}
+        run: pnpm install --frozen-lockfile
       - name: Check Next.js cache presence
         id: check-next-cache
         run: |
