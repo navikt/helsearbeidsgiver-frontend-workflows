@@ -70,36 +70,9 @@ jobs:
     needs: [playwright-tests]
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v5
-      - name: Setup pnpm
-        uses: pnpm/action-setup@v2
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node-version }}
-          cache: "pnpm"
-          cache-dependency-path: pnpm-lock.yaml
-          registry-url: "https://npm.pkg.github.com"
-      - name: Install dependencies
-        env:
-          NPM_AUTH_TOKEN: ${{ secrets.npm_reader_token }}
-          NODE_AUTH_TOKEN: ${{ secrets.npm_reader_token }}
-        run: pnpm install --frozen-lockfile
-      - name: Check Next.js cache presence
-        id: check-next-cache
-        run: |
-          if [ -d .next/cache ]; then
-            echo "has_cache=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "has_cache=false" >> "$GITHUB_OUTPUT"
-          fi
-      - name: Cache Next.js build cache
-        if: ${{ steps.check-next-cache.outputs.has_cache == 'true' }}
-        uses: actions/cache@v5
-        with:
-          path: .next/cache
-          key: ${{ runner.os }}-next-cache-${{ hashFiles('pnpm-lock.yaml', 'next.config.js', 'tsconfig.json') }}
-          restore-keys: |
-            ${{ runner.os }}-next-cache-
       - name: Download blob reports from GitHub Actions Artifacts
         uses: actions/download-artifact@v5
         with:
@@ -107,7 +80,7 @@ jobs:
           pattern: blob-report-*
           merge-multiple: true
       - name: Merge into HTML Report
-        run: pnpm exec playwright merge-reports --reporter html ./all-blob-reports
+        run: npx playwright@latest merge-reports --reporter html ./all-blob-reports
       - name: Upload HTML report
         uses: actions/upload-artifact@v4
         with:
