@@ -74,7 +74,7 @@ jobs:
         with:
           node-version: ${{ inputs.node-version }}
       - name: Download blob reports from GitHub Actions Artifacts
-        uses: actions/download-artifact@v5
+        uses: actions/download-artifact@v8
         with:
           path: all-blob-reports
           pattern: blob-report-*
