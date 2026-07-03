@@ -51,13 +51,13 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - id: meta
-        uses: dependabot/fetch-metadata@v2.4.0
+        uses: dependabot/fetch-metadata@v3.1.0
         with:
           github-token: ${{ secrets.token || secrets.GITHUB_TOKEN }}
 
       - name: Add labels for eligible update types
         if: ${{ contains(inputs.include-update-types, steps.meta.outputs.update-type) }}
-        uses: actions/github-script@v8.0.0
+        uses: actions/github-script@v9.0.0
         env:
           LABEL_NAME: ${{ inputs['label-name'] }}
           LABEL_COLOR: ${{ inputs['label-color'] }}
