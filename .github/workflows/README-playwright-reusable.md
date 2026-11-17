@@ -59,6 +59,8 @@ jobs:
 ```
 
 ## Notes
+- For pnpm projects, use `playwright-reusable-pnpm.yml` and declare the pnpm version in your project's `package.json` `packageManager` field (for example, `"packageManager": "pnpm@10.0.0"`). This variant installs pnpm through `pnpm/action-setup` and does not require Corepack.
+- The pnpm variant accepts `working-directory` (string, default `.`). Set it to the frontend directory relative to the repository root (for example, `web/klient`); package metadata, dependency installation, tests, caching and blob reports use this directory.
 - Ensure `playwright-version` matches your project’s Playwright dependency to avoid runtime mismatches.
 - Adjust `matrix` to change sharding. For no sharding, use `{"shardIndex":[1],"shardTotal":[1]}`.
 - If your org requires a PAT for the packages registry, pass it via `secrets.npm_reader_token`.
